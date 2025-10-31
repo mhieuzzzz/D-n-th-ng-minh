@@ -1,0 +1,159 @@
+#include <Servo.h>
+#include <SPI.h>
+#include <MFRC522.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <DHT.h>
+
+#define DHTPIN 7
+#define DHTTYPE DHT11
+
+#define IR_IN 2
+#define IR_OUT 3
+#define IR_SLOT 4
+
+#define SS_PIN 10
+#define RST_PIN 9
+
+Servo servoIn;
+Servo servoOut;
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+MFRC522 rfid(SS_PIN, RST_PIN);
+DHT dht(DHTPIN, DHTTYPE);
+
+int totalSlots = 3;       // tổng số chỗ
+int currentSlots = 3;     // chỗ còn lại
+int servoOpen = 90;       // góc mở barie
+int servoClose = 0;       // góc đóng barie
+
+// ======= DANH SÁCH THẺ HỢP LỆ (ví dụ) =======
+byte validCards[][4] = {
+  {0xE1, 0x2A, 0x33, 0xC7},  // thẻ 1
+  {0xC3, 0xA1, 0xB2, 0x77}   // thẻ 2
+};
+int validCount = 2;
+// ============================================
+
+void setup() {
+  Serial.begin(9600);
+  SPI.begin();
+  rfid.PCD_Init();
+  dht.begin();
+  lcd.init();
+  lcd.backlight();
+
+  pinMode(IR_IN, INPUT);
+  pinMode(IR_OUT, INPUT);
+  pinMode(IR_SLOT, INPUT);
+
+  servoIn.attach(5);
+  servoOut.attach(6);
+  servoIn.write(servoClose);
+  servoOut.write(servoClose);
+
+  lcd.setCursor(0, 0);
+  lcd.print(" Smart Parking ");
+  lcd.setCursor(0, 1);
+  lcd.print("   Initializing ");
+  delay(2000);
+  lcd.clear();
+}
+
+void loop() {
+  float temp = dht.readTemperature();
+
+  // Cập nhật số chỗ (nếu cảm biến slot LOW thì có xe)
+  if (digitalRead(IR_SLOT) == LOW) {
+    currentSlots = 0;
+  } else {
+    currentSlots = 1;
+  }
+
+  // Hiển thị lên LCD
+  lcd.setCursor(0, 0);
+  lcd.print("Temp:");
+  lcd.print(temp, 1);
+  lcd.print("C ");
+  lcd.setCursor(0, 1);
+  lcd.print("Slots:");
+  lcd.print(currentSlots);
+  lcd.print("/");
+  lcd.print(totalSlots);
+  lcd.print("   ");
+
+  // ====== Xử lý cổng vào ======
+  if (digitalRead(IR_IN) == LOW) {
+    Serial.println("Xe dang o cong vao...");
+    if (currentSlots > 0) {
+      if (checkRFID()) {
+        Serial.println("The hop le -> Mo cong vao");
+        lcd.clear();
+        lcd.print("Access granted");
+        servoIn.write(servoOpen);
+        delay(2500);
+        servoIn.write(servoClose);
+        if (currentSlots > 0) currentSlots--;
+      } else {
+        lcd.clear();
+        lcd.print("The khong hop le");
+        delay(1500);
+      }
+    } else {
+      lcd.clear();
+      lcd.print("Bai day! Wait...");
+      delay(1500);
+    }
+  }
+
+  // ====== Xử lý cổng ra ======
+  if (digitalRead(IR_OUT) == LOW) {
+    Serial.println("Xe dang o cong ra...");
+    if (checkRFID()) {
+      Serial.println("The hop le -> Mo cong ra");
+      lcd.clear();
+      lcd.print("Leaving...");
+      servoOut.write(servoOpen);
+      delay(2500);
+      servoOut.write(servoClose);
+      if (currentSlots < totalSlots) currentSlots++;
+    } else {
+      lcd.clear();
+      lcd.print("The khong hop le");
+      delay(1500);
+    }
+  }
+
+  delay(500);
+}
+
+// ====== HÀM KIỂM TRA THẺ RFID ======
+bool checkRFID() {
+  if (!rfid.PICC_IsNewCardPresent()) return false;
+  if (!rfid.PICC_ReadCardSerial()) return false;
+bool valid = false;
+  for (int i = 0; i < validCount; i++) {
+    if (compareUID(rfid.uid.uidByte, validCards[i])) {
+      valid = true;
+      break;
+    }
+  }
+
+  Serial.print("UID: ");
+  for (byte i = 0; i < rfid.uid.size; i++) {
+    Serial.print(rfid.uid.uidByte[i], HEX);
+    Serial.print(" ");
+  }
+  Serial.println(valid ? "-> HOP LE" : "-> SAI");
+
+  rfid.PICC_HaltA();
+  rfid.PCD_StopCrypto1();
+  return valid;
+}
+
+// ====== HÀM SO SÁNH UID ======
+bool compareUID(byte *uid, byte *valid) {
+  for (byte i = 0; i < 4; i++) {
+    if (uid[i] != valid[i]) return false;
+  }
+  return true;
+}
